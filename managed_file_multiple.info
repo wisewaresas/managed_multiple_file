@@ -1,0 +1,3 @@
+name = Managed File Multiple
+core = 7.x
+description = Extends form api managed_file, for support multiple files.

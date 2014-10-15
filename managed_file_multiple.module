@@ -1,0 +1,163 @@
+<?php
+/**
+ * Implements hook_element_info().
+ *
+ * The managed file element may be used anywhere in Drupal.
+ */
+function managed_file_multiple_element_info() {
+  $types['managed_file_multiple'] = array(
+    '#input' => TRUE,
+    '#process' => array('managed_file_multiple_file_process'),
+    '#value_callback' => 'file_managed_file_value',
+    '#element_validate' => array('file_managed_file_validate'),
+    '#pre_render' => array(),
+    '#theme' => 'file_managed_file',
+    '#theme_wrappers' => array('form_element'),
+    '#progress_indicator' => 'throbber',
+    '#progress_message' => NULL,
+    '#upload_validators' => array(),
+    '#upload_location' => NULL,
+    '#size' => 22,
+    '#extended' => TRUE,
+    '#default_value' => array(),
+  );
+  return $types;
+}
+
+function managed_file_multiple_file_process($element, &$form_state, $form) {
+  //dpm($element);
+  $fid = isset($element['#value']['fid']) ? $element['#value']['fid'] : 0;
+
+  // Set some default element properties.
+  $element['#progress_indicator'] = empty($element['#progress_indicator']) ? 'none' : $element['#progress_indicator'];
+  $element['#file'] = $fid ? file_load($fid) : FALSE;
+  $element['#tree'] = TRUE;
+
+  $ajax_settings = array(
+    'path' => 'file/ajax/' . implode('/', $element['#array_parents']) . '/' . $form['form_build_id']['#value'],
+    'wrapper' => $element['#id'] . '-ajax-wrapper',
+    'effect' => 'fade',
+    'progress' => array(
+      'type' => $element['#progress_indicator'],
+      'message' => $element['#progress_message'],
+    ),
+  );
+
+  // Set up the buttons first since we need to check if they were clicked.
+  $element['upload_button'] = array(
+    '#name' => implode('_', $element['#parents']) . '_upload_button',
+    '#type' => 'submit',
+    '#value' => t('Upload'),
+    '#validate' => array(),
+    '#submit' => array('file_managed_file_submit'),
+    '#limit_validation_errors' => array($element['#parents']),
+    '#ajax' => $ajax_settings,
+    '#weight' => -5,
+  );
+
+  // Force the progress indicator for the remove button to be either 'none' or
+  // 'throbber', even if the upload button is using something else.
+  $ajax_settings['progress']['type'] = ($element['#progress_indicator'] == 'none') ? 'none' : 'throbber';
+  $ajax_settings['progress']['message'] = NULL;
+  $ajax_settings['effect'] = 'none';
+
+  $element['fid'] = array(
+    '#type' => 'hidden',
+    '#value' => 0,
+  );
+
+  // The file upload field itself.
+  $element['upload'] = array(
+    '#name' => 'files[' . implode('_', $element['#parents']) . ']',
+    '#type' => 'file',
+    '#title' => t('Choose a file'),
+    '#title_display' => 'invisible',
+    '#size' => $element['#size'],
+    '#theme_wrappers' => array(),
+    '#weight' => -10,
+  );
+
+  $files = isset($element['#value']['files']) ? $element['#value']['files'] : $element['#default_value'];
+  if ($element['#file']) {
+    $files[$element['#file']->fid] = array(
+      'fid' => $element['#file']->fid,
+    );
+  }
+
+  foreach ($files as $key => $value) {
+    $fid = isset($value['fid']) ? $value['fid'] : $value;
+    if ($file = file_load($fid)) {
+      $element['files'][$fid]['image'] = array(
+        '#markup' => theme('file_link', array('file' => $file)),
+      );
+
+      $element['files'][$fid]['remove_button'] = array(
+        '#name' => implode('_', $element['#parents']) . '_remove_button',
+        '#type' => 'submit',
+        '#value' => t('Remove'),
+        '#validate' => array(),
+        '#submit' => array('file_managed_multiple_file_submit'),
+        '#limit_validation_errors' => array($element['#parents']),
+        '#ajax' => $ajax_settings,
+      );
+
+      $element['files'][$fid]['fid'] = array(
+        '#type' => 'hidden',
+        '#value' => $fid,
+        '#prefix' => $fid,
+      );
+    }
+  }
+
+  if (isset($element['files'])) {
+    $element['files']['#theme'] = 'file_element_multiple';
+  }
+
+  // Add the extension list to the page as JavaScript settings.
+  if (isset($element['#upload_validators']['file_validate_extensions'][0])) {
+    $extension_list = implode(',', array_filter(explode(' ', $element['#upload_validators']['file_validate_extensions'][0])));
+    $element['upload']['#attached']['js'] = array(
+      array(
+        'type' => 'setting',
+        'data' => array('file' => array('elements' => array('#' . $element['#id'] . '-upload' => $extension_list)))
+      )
+    );
+  }
+
+  // Prefix and suffix used for Ajax replacement.
+  $element['#prefix'] = '<div id="' . $element['#id'] . '-ajax-wrapper">';
+  $element['#suffix'] = '</div>';
+
+  return $element;
+}
+
+function file_managed_multiple_file_submit($form, &$form_state) {
+  // Determine whether it was the upload or the remove button that was clicked,
+  // and set $element to the managed_file element that contains that button.
+  $parents = $form_state['triggering_element']['#array_parents'];
+  dpm($parents, 'parents');
+  $button_key = array_pop($parents);
+  $fid = array_pop($parents);
+
+  //$element = drupal_array_get_nested_value($form, $parents);
+  // No action is needed here for the upload button, because all file uploads on
+  // the form are processed by file_managed_file_value() regardless of which
+  // button was clicked. Action is needed here for the remove button, because we
+  // only remove a file in response to its remove button being clicked.
+  if ($button_key == 'remove_button' && $file = file_load($fid)) {
+    
+    // If it's a temporary file we can safely remove it immediately, otherwise
+    // it's up to the implementing module to clean up files that are in use.
+    //if ($element['#file'] && $element['#file']->status == 0) {
+    if ($file->status == 0) {
+      file_delete($file);
+    }
+    
+    $parents[] = $fid;
+
+    NestedArray::unsetValue($form_state['values'], $parents);
+
+    NestedArray::unsetValue($form_state['input'], $parents);
+  }
+  $form_state['rebuild'] = TRUE;
+}
